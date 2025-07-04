@@ -236,7 +236,6 @@ int main(int argc, char* argv[]) {
     //Comando para compilar gcc -fopenmp secuencial.c -o secuencial -lm 
     //Comando para ejecutar: ./secuencial numero_hilos
     // Leer número de hilos desde argumentos, si se proporciona
-    double start = get_time();
 
     // Leer número de hilos desde argumentos, si se proporciona
     int m, n;
@@ -340,18 +339,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Fin del temporizador y cálculo del tiempo de ejecución
-    double end = get_time();
-    double seq_time = end - start;
-
-    //Guardar el tiempo de ejecución secuencial en un archivo para su uso en paralelo.c
-    FILE *time_file = fopen("seq_time.txt", "w");
-    if (time_file) {
-        fprintf(time_file, "%.6f\n", seq_time);
-        fclose(time_file);
-    } else {
-        perror("Error al guardar tiempo secuencial");
-    }
 
     return 0;
 }

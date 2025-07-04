@@ -389,53 +389,5 @@ int main(int argc, char* argv[]) {
     // Cerrar archivo después de leer datos
     fclose(archivo);
 
-    // compilar y ejecutar la versión secuencial para obtener el tiempo base
-    printf("Compilando versión secuencial...\n");
-    system("gcc secuencial.c -o secuencial -lm");
-    printf("Ejecutando versión secuencial...\n");
-    system("./secuencial");
-
-    // Leer el tiempo de ejecución secuencial desde un archivo
-    double seq_time;
-    FILE* time_file = fopen("seq_time.txt", "r");
-    if (!time_file || fscanf(time_file, "%lf", &seq_time) != 1) {
-        perror("Error al leer tiempo secuencial");
-        seq_time = 0; // Fallback in case of error
-    }
-    if (time_file) fclose(time_file);
-
-    // Correr versión paralela para 10 ensayos con conteos de hilos 2^1 a 2^10
-    const int N = 10;
-    double par_times[N];
-    int thread_counts[N];
-    for (int i = 0; i < N; i++) {
-        thread_counts[i] = 1 << (i + 1); // 2^(i+1)
-        printf("\nEjecutando paralelo con %d hilos...\n", thread_counts[i]);
-        double start = get_time();
-        if (compute_pseudoinverse(m, n, matriz, thread_counts[i]) != 0) {
-            printf("Error en ejecución paralela con %d hilos\n", thread_counts[i]);
-            par_times[i] = 0;
-        } else {
-            double end = get_time();
-            par_times[i] = end - start;
-            printf("Tiempo paralelo con %d hilos: %.6f segundos\n", thread_counts[i], par_times[i]);
-        }
-    }
-
-    // Guardar resultados en metricas.met
-    FILE* output = fopen("metricas.met", "w");
-    if (!output) {
-        perror("Error al abrir metricas.met");
-        return 1;
-    }
-    fprintf(output, "Ensayo\tHilos\tSpeedup\tEficiencia\n");
-    for (int i = 0; i < N; i++) {
-        double speedup = (par_times[i] > 0 && seq_time > 0) ? seq_time / par_times[i] : 0;
-        double efficiency = (thread_counts[i] > 0) ? speedup / thread_counts[i] : 0;
-        fprintf(output, "%d\t%d\t%.40f\t%.40f\n", i + 1, thread_counts[i], speedup, efficiency);
-    }
-    fclose(output);
-    printf("\nResultados guardados en metricas.met\n");
-
     return 0;
 }

@@ -8,6 +8,7 @@
  * Compilar:
  */
 
+#include <cuda_runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -399,9 +400,40 @@ int main(int argc, char *argv[]) {
         }
     }
     fclose(archivo);
-    
+
+// Medición del tiempo paralelo usando eventos CUDA
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
     pseudoinversa_cuda(m, n, matriz_mn_h);
 
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float tiempo_paralelo_ms;
+    cudaEventElapsedTime(&tiempo_paralelo_ms, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 
+    // Suponiendo que T_secuencial viene de la Evaluación 2 (debes reemplazar este valor)
+    double tiempo_secuencial_ms = 0.026141; // Reemplaza con el valor de la Evaluación 2
+    // Nota: Debes obtener este valor de la Evaluación 2 y asignarlo aquí
+
+    // Cálculo del speedup
+    double speedup = tiempo_secuencial_ms / tiempo_paralelo_ms;
+
+    // Escribir resultados en tiempos.txt
+    FILE *tiempos = fopen("tiempos.txt", "w");
+    if (tiempos) {
+        fprintf(tiempos, "T_paralelo: %.2f ms\n", tiempo_paralelo_ms);
+        fprintf(tiempos, "T_secuencial: %.2f ms\n", tiempo_secuencial_ms);
+        fprintf(tiempos, "Speedup: %.2f\n", speedup);
+        fclose(tiempos);
+    } else {
+        perror("Error al abrir tiempos.txt");
+    }
+
+    free(matriz_mn_h);
     return 0;
 }

@@ -1,3 +1,1 @@
-T_paralelo: 2.94 ms
-T_secuencial: 0.03 ms
-Speedup: 0.01
+T_paralelo: 0.04172115 s

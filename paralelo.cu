@@ -365,7 +365,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
 
 int main(int argc, char *argv[]) {
     int m, n;
-    FILE *archivo = fopen("entrada.ent", "r");
+    FILE *archivo = fopen("entrada_grande.ent", "r");
 
     if (!archivo)
     {
@@ -401,7 +401,7 @@ int main(int argc, char *argv[]) {
     }
     fclose(archivo);
 
-// Medición del tiempo paralelo usando eventos CUDA
+    // Medición del tiempo paralelo usando eventos CUDA
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -416,19 +416,12 @@ int main(int argc, char *argv[]) {
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    // Suponiendo que T_secuencial viene de la Evaluación 2 (debes reemplazar este valor)
-    double tiempo_secuencial_ms = 0.026141; // Reemplaza con el valor de la Evaluación 2
-    // Nota: Debes obtener este valor de la Evaluación 2 y asignarlo aquí
-
     // Cálculo del speedup
-    double speedup = tiempo_secuencial_ms / tiempo_paralelo_ms;
 
     // Escribir resultados en tiempos.txt
     FILE *tiempos = fopen("tiempos.txt", "w");
     if (tiempos) {
-        fprintf(tiempos, "T_paralelo: %.2f ms\n", tiempo_paralelo_ms);
-        fprintf(tiempos, "T_secuencial: %.2f ms\n", tiempo_secuencial_ms);
-        fprintf(tiempos, "Speedup: %.2f\n", speedup);
+        fprintf(tiempos, "T_paralelo: %.8f s\n", tiempo_paralelo_ms / 1000.0f);
         fclose(tiempos);
     } else {
         perror("Error al abrir tiempos.txt");

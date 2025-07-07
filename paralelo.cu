@@ -225,62 +225,97 @@ __global__ void transpuesta_cuda(int m, int n, double *matriz_mn_d, double *matr
     }
 }
 
+// multiplicación de matrices
+__global__ void matrizMul_cuda(double *A, double *B, double *C, int m, int n, int p) {
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < m && j < p) {
+        double sum = 0.0;
+        for (int k = 0; k < n; k++) {
+            sum += A[i * n + k] * B[k * p + j];
+        }
+        C[i * p + j] = sum;
+    }
+}
+
 // 
-__host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h){
+__host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
     // Parametrización reserva de memoria
     size_t size_mn = m * n * sizeof(double);
     size_t size_nm = n * m * sizeof(double);
-    /* size_t size_mm = m * m * sizeof(double); */
-    
+    size_t size_mm = m * m * sizeof(double);
+    size_t size_nn = n * n * sizeof(double);
 
-    double *matriz_mn_d, *matriz_nm_d/* , *matriz_cuadrada_inv_d, *matriz_pseudo_inv_d */;
-    /* double *matriz_cuadrada_inv_h, *matriz_pseudo_inv_h; */
+    double *matriz_mn_d, *matriz_nm_d, *matriz_cuadrada_d;
+    double *matriz_nm_h, *matriz_cuadrada_h;
 
     // Reservar memoria en el host
-    double *matriz_nm_h = (double *)malloc(n * m * sizeof(double));
+    matriz_nm_h = (double *)malloc(size_nm);
+    if (!matriz_nm_h) {
+        fprintf(stderr, "Error al reservar memoria para matriz_nm_h\n");
+        return;
+    }
+    matriz_cuadrada_h = (double *)malloc((m < n ? size_mm : size_nn));
+    if (!matriz_cuadrada_h) {
+        fprintf(stderr, "Error al reservar memoria para matriz_cuadrada_h\n");
+        free(matriz_nm_h);
+        return;
+    }
 
     // Reservar memoria en el dispositivo
     cudaMalloc(&matriz_mn_d, size_mn);
     cudaMalloc(&matriz_nm_d, size_nm);
+    cudaMalloc(&matriz_cuadrada_d, (m < n ? size_mm : size_nn));
 
     cudaMemcpy(matriz_mn_d, matriz_mn_h, size_mn, cudaMemcpyHostToDevice);
 
     // Configurar dimensiones de grid y block
     dim3 blockDim(BLOCK, GRID);
-    dim3 gridDim((n + blockDim.x - 1) / blockDim.x, (m + blockDim.y - 1) / blockDim.y);
-
-    int rango = calcular_rango_cuda(m, n, matriz_mn_h);
+    dim3 gridDimTrans((n + blockDim.x - 1) / blockDim.x, (m + blockDim.y - 1) / blockDim.y);
+    dim3 gridDimMul((m < n ? m : n + blockDim.x - 1) / blockDim.x, (m < n ? m : n + blockDim.y - 1) / blockDim.y);
 
     // Calcular Transpuesta
-    transpuesta_cuda<<<gridDim, blockDim>>>(m, n, matriz_mn_d, matriz_nm_d);
+    transpuesta_cuda<<<gridDimTrans, blockDim>>>(m, n, matriz_mn_d, matriz_nm_d);
     cudaMemcpy(matriz_nm_h, matriz_nm_d, size_nm, cudaMemcpyDeviceToHost);
 
     // Calcular Matriz inversa 
-
+    int rango = calcular_rango_cuda(m, n, matriz_mn_h);
     if (rango == m) {
+        // Calcular A^T A (m×m)
+        matrizMul_cuda<<<gridDimMul, blockDim>>>(matriz_mn_d, matriz_nm_d, matriz_cuadrada_d, m, n, m);
+        cudaDeviceSynchronize();
+        cudaMemcpy(matriz_cuadrada_h, matriz_cuadrada_d, size_mm, cudaMemcpyDeviceToHost);
+        // Imprimir matriz cuadrada (temporal, para depuración)
+        printMatrix("A^T A", m, m, matriz_cuadrada_h);
+
         double *matriz_inv_h = (double *)malloc(n * n * sizeof(double));
         int respuesta = calcular_inversa_cuda(n, matriz_nm_h, matriz_inv_h);
-
-        // Imprimir Transpuesta
         printMatrix("Matriz Transpuesta", n, n, matriz_inv_h);
+        free(matriz_inv_h);
     }
-
     if (rango == n) {
+        // Calcular A A^T (n×n)
+        matrizMul_cuda<<<gridDimMul, blockDim>>>(matriz_nm_d, matriz_mn_d, matriz_cuadrada_d, n, m, n);
+        cudaDeviceSynchronize();
+        cudaMemcpy(matriz_cuadrada_h, matriz_cuadrada_d, size_nn, cudaMemcpyDeviceToHost);
+        // Imprimir matriz cuadrada (temporal, para depuración)
+        printMatrix("A A^T", n, n, matriz_cuadrada_h);
 
         double *matriz_inv_h = (double *)malloc(n * n * sizeof(double));
         int respuesta = calcular_inversa_cuda(n, matriz_nm_h, matriz_inv_h);
-
-        // Imprimir Transpuesta
         printMatrix("Matriz Transpuesta", n, n, matriz_inv_h);
+        free(matriz_inv_h);
     }
-    
 
     // Liberacion de espacios de gpu
     cudaFree(matriz_mn_d);
     cudaFree(matriz_nm_d);
+    cudaFree(matriz_cuadrada_d);
 
     // Liberación de espacios de host
     free(matriz_nm_h);
+    free(matriz_cuadrada_h);
 
     return;
 }
@@ -322,7 +357,7 @@ int main(int argc, char *argv[]) {
         }
     }
     fclose(archivo);
-
+    
     pseudoinversa_cuda(m, n, matriz_mn_h);
 
     return 0;

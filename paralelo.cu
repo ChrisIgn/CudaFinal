@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <math.h>
 
-const int BLOCK = 16;
-const int GRID = 16;
+#define BLOCK = 16;
+#define GRID = 16;
 
 //Funcion para escribir la matriz resultante en el archivo de salida
 __host__  void printMatrix(const char *label, int m, int n, double *matriz){

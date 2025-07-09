@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define BLOCK = 16;
-#define GRID = 16;
+//#define BLOCK 16;
+//#define GRID  16;
 
 //Funcion para escribir la matriz resultante en el archivo de salida
 __host__  void printMatrix(const char *label, int m, int n, double *matriz){
@@ -48,13 +48,14 @@ __global__ void normalizar_fila(double* aug, int m, int fila, int ancho) {
     }
 }
 
-__global__ void eliminar_filas_kernel(double* aug, int m, int fila_pivote, int ancho) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < m && i != fila_pivote) {
+__global__ void eliminar_filas_kernel_2d(double* aug, int m, int fila_pivote, int ancho) {
+    int i = blockIdx.y * blockDim.y + threadIdx.y; // filas
+    int j = blockIdx.x * blockDim.x + threadIdx.x; // columnas
+
+    if (i < m && i != fila_pivote && j < ancho) {
         double factor = aug[IDX(i, fila_pivote, ancho)];
-        for (int j = 0; j < ancho; j++) {
-            aug[IDX(i, j, ancho)] -= factor * aug[IDX(fila_pivote, j, ancho)];
-        }
+        double valor_pivote = aug[IDX(fila_pivote, j, ancho)];
+        aug[IDX(i, j, ancho)] -= factor * valor_pivote;
     }
 }
 
@@ -119,7 +120,7 @@ __host__ int calcular_inversa_cuda(int m, double* matriz_h, double* matriz_inv_h
         cudaDeviceSynchronize();
 
         // Eliminar otras filas
-        eliminar_filas_kernel<<<(m + 255) / 256, 256>>>(aug_d, m, col, ancho);
+        eliminar_filas_kernel_2d<<<(m + 255) / 256, 256>>>(aug_d, m, col, ancho);
         cudaDeviceSynchronize();
     }
 
@@ -155,64 +156,56 @@ __global__ void eliminar_filas(double* A, int m, int n, int rank, int col_pivote
 }
 
 // Funcion para el calculo del Rango
-__host__ int calcular_rango_cuda(int m, int n, double* A_original_h) {
+int calcular_rango_secuencial(int m, int n, double* A_original) {
     const double EPS = 1e-16;
 
-    // Crear una copia de A_h para no modificar la original
-    double* A_h = (double*)malloc(m * n * sizeof(double));
-    memcpy(A_h, A_original_h, m * n * sizeof(double));
-
-    // Copiar matriz al device
-    double* A_d;
-    cudaMalloc(&A_d, m * n * sizeof(double));
-    cudaMemcpy(A_d, A_h, m * n * sizeof(double), cudaMemcpyHostToDevice);
-
-    double* fila_pivote_h = (double*)malloc(n * sizeof(double));
-    double* fila_pivote_d;
-    cudaMalloc(&fila_pivote_d, n * sizeof(double));
+    // Crear copia local de la matriz para no modificar la original
+    double* A = (double*)malloc(m * n * sizeof(double));
+    if (!A) {
+        fprintf(stderr, "Error: no se pudo reservar memoria para la matriz.\n");
+        return -1;
+    }
+    memcpy(A, A_original, m * n * sizeof(double));
 
     int rank = 0;
 
     for (int i = 0; i < n; i++) {
-        // Buscar fila pivote desde el host
         int pivote = -1;
-        cudaMemcpy(A_h, A_d, m * n * sizeof(double), cudaMemcpyDeviceToHost);
 
+        // Buscar fila con pivote válido en la columna actual
         for (int j = rank; j < m; j++) {
-            if (fabs(A_h[j * n + i]) > EPS) {
+            if (fabs(A[j * n + i]) > EPS) {
                 pivote = j;
                 break;
             }
         }
 
         if (pivote != -1) {
-            // Intercambiar filas pivote y actual
+            // Intercambiar filas si es necesario
             if (pivote != rank) {
                 for (int k = 0; k < n; k++) {
-                    double tmp = A_h[rank * n + k];
-                    A_h[rank * n + k] = A_h[pivote * n + k];
-                    A_h[pivote * n + k] = tmp;
+                    double tmp = A[rank * n + k];
+                    A[rank * n + k] = A[pivote * n + k];
+                    A[pivote * n + k] = tmp;
                 }
-                cudaMemcpy(A_d, A_h, m * n * sizeof(double), cudaMemcpyHostToDevice);
             }
 
-            // Copiar fila pivote al host y luego al device
-            cudaMemcpy(fila_pivote_h, &A_d[rank * n], n * sizeof(double), cudaMemcpyDeviceToHost);
-            cudaMemcpy(fila_pivote_d, fila_pivote_h, n * sizeof(double), cudaMemcpyHostToDevice);
+            // Eliminar elementos de la columna actual en otras filas
+            for (int j = 0; j < m; j++) {
+                if (j != rank) {
+                    double factor = A[j * n + i] / A[rank * n + i];
+                    for (int k = 0; k < n; k++) {
+                        A[j * n + k] -= factor * A[rank * n + k];
+                    }
+                }
+            }
 
-            eliminar_filas<<<BLOCK, GRID>>>(A_d, m, n, rank, i, fila_pivote_d);
-            cudaDeviceSynchronize();
-
+            // Aumentar el rango
             rank++;
         }
     }
 
-    // Liberar memoria
-    cudaFree(A_d);
-    cudaFree(fila_pivote_d);
-    free(fila_pivote_h);
-    free(A_h);  // también libera la copia local
-
+    free(A);
     return rank;
 }
 
@@ -227,16 +220,39 @@ __global__ void transpuesta_cuda(int m, int n, double *matriz_mn_d, double *matr
 }
 
 // Calcular la Multiplicación de matrices
-__global__ void matrizMul_cuda(double *A, double *B, double *C, int m, int n, int p) {
-    int i = blockIdx.y * blockDim.y + threadIdx.y;
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
+#define TILE_WIDTH 32
 
-    if (i < m && j < p) {
-        double sum = 0.0;
-        for (int k = 0; k < n; k++) {
-            sum += A[i * n + k] * B[k * p + j];
+__global__ void matrizMul_shared(double *A, double *B, double *C, int m, int n, int p) {
+    __shared__ double tileA[TILE_WIDTH][TILE_WIDTH];
+    __shared__ double tileB[TILE_WIDTH][TILE_WIDTH];
+
+    int row = blockIdx.y * TILE_WIDTH + threadIdx.y;
+    int col = blockIdx.x * TILE_WIDTH + threadIdx.x;
+
+    double sum = 0.0;
+
+    for (int t = 0; t < (n + TILE_WIDTH - 1) / TILE_WIDTH; t++) {
+        if (row < m && t * TILE_WIDTH + threadIdx.x < n)
+            tileA[threadIdx.y][threadIdx.x] = A[row * n + t * TILE_WIDTH + threadIdx.x];
+        else
+            tileA[threadIdx.y][threadIdx.x] = 0.0;
+
+        if (col < p && t * TILE_WIDTH + threadIdx.y < n)
+            tileB[threadIdx.y][threadIdx.x] = B[(t * TILE_WIDTH + threadIdx.y) * p + col];
+        else
+            tileB[threadIdx.y][threadIdx.x] = 0.0;
+
+        __syncthreads();
+
+        for (int k = 0; k < TILE_WIDTH; ++k) {
+            sum += tileA[threadIdx.y][k] * tileB[k][threadIdx.x];
         }
-        C[i * p + j] = sum;
+
+        __syncthreads();
+    }
+
+    if (row < m && col < p) {
+        C[row * p + col] = sum;
     }
 }
 
@@ -280,7 +296,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
     // ------------------------------
     // Configuración de bloques e hilos
     // ------------------------------
-    dim3 blockDim(BLOCK, GRID);
+    dim3 blockDim(32, 32);
     dim3 gridDimTrans((n + blockDim.x - 1) / blockDim.x, (m + blockDim.y - 1) / blockDim.y);
 
     // ------------------------------
@@ -292,7 +308,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
     // ------------------------------
     // Calcular el rango de la matriz original
     // ------------------------------
-    int rango = calcular_rango_cuda(m, n, matriz_mn_h);
+    int rango = calcular_rango_secuencial(m, n, matriz_mn_h);
 
     // ------------------------------
     // Caso 1: Rango completo por filas (rango == m)
@@ -302,7 +318,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
 
         // Calcular A * Aᵗ → matriz_cuadrada_d (m×m)
         dim3 gridDimMul((m + blockDim.x - 1) / blockDim.x, (m + blockDim.y - 1) / blockDim.y);
-        matrizMul_cuda<<<gridDimMul, blockDim>>>(matriz_mn_d, matriz_nm_d, matriz_cuadrada_d, m, n, m);
+        matrizMul_shared<<<gridDimMul, blockDim>>>(matriz_mn_d, matriz_nm_d, matriz_cuadrada_d, m, n, m);
         cudaDeviceSynchronize();
         cudaMemcpy(matriz_cuadrada_h, matriz_cuadrada_d, size_mm, cudaMemcpyDeviceToHost);
 
@@ -312,7 +328,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
 
         // Calcular Aᵗ * (A * Aᵗ)⁻¹ → Pseudoinversa
         dim3 gridDimPI((m + blockDim.x - 1) / blockDim.x, (n + blockDim.y - 1) / blockDim.y);
-        matrizMul_cuda<<<gridDimPI, blockDim>>>(matriz_nm_d, matriz_inv_d, matriz_pseudo_inv_d, n, m, m);
+        matrizMul_shared<<<gridDimPI, blockDim>>>(matriz_nm_d, matriz_inv_d, matriz_pseudo_inv_d, n, m, m);
         cudaDeviceSynchronize();
 
         // Copiar resultado al host
@@ -330,7 +346,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
 
         // Calcular Aᵗ * A → matriz_cuadrada_d (n×n)
         dim3 gridDimMul((n + blockDim.x - 1) / blockDim.x, (n + blockDim.y - 1) / blockDim.y);
-        matrizMul_cuda<<<gridDimMul, blockDim>>>(matriz_nm_d, matriz_mn_d, matriz_cuadrada_d, n, m, n);
+        matrizMul_shared<<<gridDimMul, blockDim>>>(matriz_nm_d, matriz_mn_d, matriz_cuadrada_d, n, m, n);
         cudaDeviceSynchronize();
         cudaMemcpy(matriz_cuadrada_h, matriz_cuadrada_d, size_nn, cudaMemcpyDeviceToHost);
 
@@ -340,7 +356,7 @@ __host__ void pseudoinversa_cuda(int m, int n, double *matriz_mn_h) {
 
         // Calcular (Aᵗ * A)⁻¹ * Aᵗ → Pseudoinversa
         dim3 gridDimPI((m + blockDim.x - 1) / blockDim.x, (n + blockDim.y - 1) / blockDim.y);
-        matrizMul_cuda<<<gridDimPI, blockDim>>>(matriz_inv_d, matriz_nm_d, matriz_pseudo_inv_d, n, n, m);
+        matrizMul_shared<<<gridDimPI, blockDim>>>(matriz_inv_d, matriz_nm_d, matriz_pseudo_inv_d, n, n, m);
         cudaDeviceSynchronize();
 
         cudaMemcpy(matriz_pseudo_inv_h, matriz_pseudo_inv_d, size_nm, cudaMemcpyDeviceToHost);

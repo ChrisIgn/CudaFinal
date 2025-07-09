@@ -1,1 +1,1 @@
-T_paralelo: 0.02017849 s
+T_paralelo: 0.02609728 s
